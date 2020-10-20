@@ -1,0 +1,6 @@
+*.nb.html
+
+*.Rprofile
+*.DS_Store
+**/.Rproj.user
+**/renv
