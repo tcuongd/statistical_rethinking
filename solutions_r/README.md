@@ -17,4 +17,4 @@ renv::restore()
 
 Follow the prompts to install the dependencies.
 
-After that you should be able to open and run the `.Rmd` files for each chapter with no issues. They can be knitted to `.nb.html` files using the Knit functionality in RStudio.
+After that you should be able to open and run the `.Rmd` files for each chapter. They can be knitted to `.nb.html` files using the Knit functionality in RStudio.
