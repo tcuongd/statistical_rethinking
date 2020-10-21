@@ -1,6 +1,6 @@
 ## Resources for Statistical Rethinking, 2nd Edition
 
-Statistical Rethinking is a course and textbook by Richard McElreath. The main materials for the course including lecture slides, lecture notes, homework exercises and solutions, and the accompanying R package `rethinking` are available from the main website: https://xcelab.net/rm/statistical-rethinking/
+Statistical Rethinking, 2nd Edition is a course and textbook by Richard McElreath. The main materials for the course and textbook are available from the main website: https://xcelab.net/rm/statistical-rethinking/
 
 This repo provides additional resources to accompany the main materials. The resources are:
 

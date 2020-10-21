@@ -162,15 +162,18 @@ We weight the scenarios in 2M4 by the probability that each card is pulled. The 
 
 #### Answer
 
-We fan out the three scenarios that have black showing face-up:
+We fan out the three scenarios that have black showing face-up. Note that in the scenarios where the first card is Card 2, the second card can only be Card 3.
 
-* Card 1: BB -> Card 2: W
-* Card 1: BB -> Card 3: W
-* Card 1: BB -> Card 2: W
-* Card 1: BB -> Card 3: W
-* Card 2: BW -> Card 3: W
+* Card 1: BB -> Card 2: WB
+* Card 1: BB -> Card 3: WW
+* Card 1: BB -> Card 3: WW
+* Card 1: BB -> Card 2: WB
+* Card 1: BB -> Card 3: WW
+* Card 1: BB -> Card 3: WW
+* Card 2: BW -> Card 3: WW
+* Card 2: BW -> Card 3: WW
 
-Note that in the last scenario the new card must be Card 3. Now the probability that black is showing face-down on the first card is $4/5 = 0.8$.
+Now the probability that black is showing face-down on the first card is $6/8 = 0.75$.
 
 ### 2H1
 

@@ -1,13 +1,17 @@
-### Solutions to Practice exercises in R and `cmdstanr`
+## Solutions to Practice exercises in R and `cmdstanr`
 
-#### Installation
+### Installation
 
 Ensure you have the following installed:
 
 * RStudio
 * `R` >= 4.0
 
-For the smoothest package dependency experience this project uses `renv`. You can install `renv` to `R` using `install.packages("renv")`.
+For package dependency management this project uses `renv`. You can install `renv` to `R` by running
+
+```
+install.packages("renv")
+```
 
 Once `renv` is installed, open `solutions_r.Rproj` and run:
 
