@@ -1,0 +1,388 @@
+---
+title: "Chapter 3 Solutions"
+author: "Cuong Duong"
+date: "Last updated: `r format(.POSIXct(Sys.time(), tz = 'UTC'), '%Y-%m-%d %H:%M:%S %Z')`"
+output:
+  html_notebook:
+    default
+---
+
+```{r, eval=TRUE, results='hide'}
+library(cmdstanr)
+library(ggplot2)
+library(data.table)
+library(magrittr)
+
+options(scipen = 999)
+theme_set(theme_minimal())
+```
+
+Samples to use for Easy exercises:
+
+```{r}
+get_samples_e <- function() {
+  p_grid <- seq(0, 1, length.out = 1000)
+  prior <- rep(1, 1000)
+  likelihood <- dbinom(x = 6, size = 9, prob = p_grid)
+  posterior <- likelihood * prior
+  posterior <- posterior / sum(posterior)
+  set.seed(100)
+  
+  sample(p_grid, prob = posterior, size = 10000, replace = TRUE)
+}
+
+samples_e <- get_samples_e()
+```
+
+### 3E1
+
+#### Answer
+
+```{r}
+sum(samples_e < 0.2) / length(samples_e)
+```
+
+### 3E2
+
+#### Answer
+
+```{r}
+sum(samples_e > 0.8) / length(samples_e)
+```
+
+### 3E3
+
+#### Answer
+
+```{r}
+sum(samples_e > 0.2 & samples_e < 0.8) / length(samples_e)
+```
+
+### 3E4
+
+#### Answer
+
+```{r}
+quantile(samples_e, 0.2)
+```
+
+### 3E5
+
+#### Answer
+
+```{r}
+quantile(samples_e, 0.8)
+```
+
+### 3E6
+
+#### Answer
+
+We use the function `hdi` from the `HDInterval` package. The source code can be found [here](https://github.com/cran/HDInterval/blob/master/R/hdiVector.R).
+
+```{r}
+HDInterval::hdi(samples_e, 0.66)
+```
+
+### 3E7
+
+#### Answer
+
+```{r}
+find_central_interval <- function(samples, perc) {
+  tail_prob <- (1 - perc) / 2
+  
+  quantile(samples, c(tail_prob, 1 - tail_prob))
+}
+
+find_central_interval(samples_e, 0.66)
+```
+
+### 3M1
+
+#### Answer
+
+We'll reuse the code from the Chapter 2 solutions.
+
+```{r}
+# Uniform prior
+prior_uniform <- function(p) {
+  p
+}
+
+calculate_likelihood <- function(obs, p) {
+  dbinom(x = sum(obs), size = length(obs), p = p)
+}
+
+posterior_grid_approximate <- function(prior_function, obs, n_points) {
+  params <- seq(0, 1, length.out = n_points)
+  prior <- prior_function(params)
+  likelihood <- calculate_likelihood(obs, params)
+  product <- prior * likelihood
+  probs <- product / sum(product)
+  
+  data.table(p = params, prob = probs)
+}
+
+plot_posterior_grid <- function(df) {
+  ggplot(df, aes(x = p, y = prob)) +
+    geom_point()
+}
+```
+
+Let 1 = Water, 0 = Land.
+
+```{r}
+obs <- c(rep(1, 8), rep(0, 7))
+```
+
+```{r}
+posterior_approx_m <- posterior_grid_approximate(prior_uniform, obs, n_points = 1000)
+```
+
+```{r}
+posterior_approx_m %>% 
+  plot_posterior_grid()
+```
+
+### 3M2
+
+#### Answer
+
+```{r}
+samples_m <- sample(posterior_approx_m$p, prob = posterior_approx_m$prob, size = 10000, replace = TRUE)
+```
+
+```{r}
+HDInterval::hdi(samples_m, 0.9)
+```
+
+### 3M3
+
+#### Answer
+
+```{r}
+water_toss_preds <- rbinom(100000, size = 15, prob = samples_m)
+```
+
+```{r}
+sum(water_toss_preds == 8) / length(water_toss_preds)
+```
+
+### 3M4
+
+#### Answer
+
+```{r}
+water_toss_preds <- rbinom(100000, size = 9, prob = samples_m)
+```
+
+```{r}
+sum(water_toss_preds == 6) / length(water_toss_preds)
+```
+
+### 3M5
+
+#### Answer
+
+```{r}
+prior_step <- function(p) {
+  ifelse(p < 0.5, 0, 1 / (1 - 0.5))
+}
+```
+
+```{r}
+posterior_approx_step <- posterior_grid_approximate(prior_step, obs, n_points = 1000)
+```
+
+```{r}
+samples_step <- sample(posterior_approx_step$p, prob = posterior_approx_step$prob, size = 10000, replace = TRUE)
+```
+
+90% HDI for the proportion of water:
+
+```{r}
+HDInterval::hdi(samples_step, 0.9)
+```
+
+Probability of observting 8 water in 15 tosses:
+
+```{r}
+water_toss_preds <- rbinom(100000, size = 15, prob = samples_step)
+sum(water_toss_preds == 8) / length(water_toss_preds)
+```
+
+Probability of observing 6 water in 9 tosses:
+
+```{r}
+water_toss_preds <- rbinom(100000, size = 9, prob = samples_step)
+sum(water_toss_preds == 6) / length(water_toss_preds)
+```
+
+Having a better prior:
+
+* Reduces the size of the highest density interval as we do not believe `p` can be less than 0.5.
+* However, the true value of `p = 0.7` is now on the edge of the interval, meaning that the posterior assigns a lower likelihood to it. 
+* The reason for this is that our observed data (8 out of 15 tosses) supports the prior assumption, which makes us more confident of the data sooner, but the observed proportion in this case is `0.533`, far from the true `p = 0.7`.
+
+### 3M6
+
+#### Answer
+
+We'll calculate the required number of observations under the flat prior as well as the step prior.
+
+It doesn't matter what the observed proportion is in this case, as the more data we get, the more confident we are about `p` (the tighter the posterior distribution). So first we write a function to generate observations given some number of tosses.
+
+```{r}
+generate_obs <- function(n_tosses) {
+  obs <- rep(0, n_tosses)
+  obs[seq_len(round(0.7 * n_tosses))] <- 1
+  
+  obs
+}
+```
+
+Then we increment n_tosses and calculate the posterior percentile interval for `p` in each case until we hit an interval length < 0.05.
+
+```{r}
+find_required_tosses <- function(perc, required_interval_length, prior_function) {
+  interval_length <- required_interval_length + 0.01
+  required_tosses <- 1
+  while(interval_length > required_interval_length) {
+    obs <- generate_obs(required_tosses)
+    posterior_fn <- posterior_grid_approximate(prior_function, obs, n_points = 1000)
+    set.seed(100)
+    samples <- sample(posterior_fn$p, prob = posterior_fn$prob, size = 100000, replace = TRUE)
+    percentile_interval <- find_central_interval(samples, perc)
+    interval_length <- percentile_interval[2] - percentile_interval[1]
+    required_tosses <- required_tosses + 1
+  }
+  
+  required_tosses
+}
+```
+
+```{r}
+find_required_tosses(0.99, required_interval_length = 0.05, prior_uniform)
+```
+
+```{r}
+find_required_tosses(0.99, required_interval_length = 0.05, prior_step)
+```
+
+For either prior, we need around 2,270 tosses to get the 99% percentile interval to have a length of 0.05.
+
+### 3H1
+
+```{r}
+birth_data <- fread("hard_problems_data.csv")
+```
+
+#### Answer
+
+```{r}
+birth_obs <- c(birth_data$birth1, birth_data$birth2)
+```
+
+```{r}
+posterior_male_birth <- posterior_grid_approximate(prior_uniform, birth_obs, 1000)
+```
+
+```{r}
+posterior_male_birth %>% 
+  plot_posterior_grid()
+```
+
+```{r}
+posterior_male_birth[prob == max(prob)]
+```
+
+`p = 0.558` maximises the posterior proability.
+
+### 3H2
+
+#### Answer
+
+```{r}
+samples_birth_male <- sample(x = posterior_male_birth$p, prob = posterior_male_birth$prob, size = 10000, replace = TRUE)
+
+for (perc in c(0.5, 0.89, 0.97)) {
+  print(HDInterval::hdi(samples_birth_male, perc))
+}
+```
+
+### 3H3
+
+#### Answer
+
+```{r}
+male_birth_preds <- rbinom(n = 10000, size = 200, prob = samples_birth_male)
+```
+
+```{r}
+data.table(male_births = male_birth_preds) %>% 
+  ggplot(aes(x = male_births)) + 
+  geom_histogram(binwidth = 2)
+```
+The posterior predictive distribution of the number of male births fits the data well. The distribution is centered and symmetrical around the observed value of 111.
+
+### 3H4
+
+#### Answer
+
+```{r}
+male_first_birth_preds <- rbinom(n = 10000, size = 100, prob = samples_birth_male)
+```
+
+```{r}
+data.table(male_births = male_first_birth_preds) %>% 
+  ggplot(aes(x = male_births)) + 
+  geom_histogram(binwidth = 2)
+```
+The observed number of first births that were male:
+
+```{r}
+sum(birth_data$birth1)
+```
+
+The model is not as good a fit in this case. The distribution is centered around 55-56 instead of 51.
+
+### 3H5
+
+#### Answer
+
+For any given `p`, we simulate birth pairs assuming independence between births. For each replication we simulate 100 birth pairs.
+
+```{r}
+predict_male_after_female <- function(n_births = 100, probs) {
+  preds <- numeric(length(probs))
+  for (i in seq_along(probs)) {
+    results = data.table(
+      birth1 = rbinom(n = n_births, size = 1, prob = probs[i]),
+      birth2 = rbinom(n = n_births, size = 1, prob = probs[i])
+    )
+    preds[i] = nrow(results[birth2 == 1 & birth1 == 0])
+  }
+  
+  preds
+}
+```
+
+```{r}
+male_after_female_preds <- predict_male_after_female(probs = samples_birth_male)
+```
+
+```{r}
+data.table(male_after_female = male_after_female_preds) %>% 
+  ggplot(aes(x = male_after_female)) + 
+  geom_histogram(binwidth = 2)
+```
+Observed data shows:
+
+```{r}
+nrow(birth_data[birth2 == 1 & birth1 == 0])
+```
+
+The model's predictive distribution is centered around 23-24, which is much lower than the observed count of 39 (males born after females).
+
+My guess is that the data represents births from a culture or period of time when boys were seen as 'more valuable' than girls due their stronger physical ability (and hence ability to do labour work). If a female was born first, a family may have been more desparate for a boy, leading them to abort female foetuses. This results in a dependence structure between the second birth being male and the outcome of the first birth, which is not captured by the model.
