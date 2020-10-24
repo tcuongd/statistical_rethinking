@@ -222,8 +222,7 @@ sum(water_toss_preds == 6) / length(water_toss_preds)
 Having a better prior:
 
 * Reduces the size of the highest density interval as we do not believe `p` can be less than 0.5.
-* However, the true value of `p = 0.7` is now on the edge of the interval, meaning that the posterior assigns a lower likelihood to it. 
-* The reason for this is that our observed data (8 out of 15 tosses) supports the prior assumption, which makes us more confident of the data sooner, but the observed proportion in this case is `0.533`, far from the true `p = 0.7`.
+* However, the true value of `p = 0.7` is now on the edge of the interval, meaning that the posterior assigns a lower likelihood to it.
 
 ### 3M6
 
