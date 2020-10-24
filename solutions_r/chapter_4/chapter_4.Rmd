@@ -1,0 +1,153 @@
+---
+title: "Chapter 4 Practice Exercises Solutions"
+author: "Cuong Duong"
+date: "2020-10-25"
+output:
+  html_notebook:
+    default
+---
+
+```{r, eval=TRUE, results='hide'}
+library(cmdstanr)
+library(ggplot2)
+library(data.table)
+library(magrittr)
+
+options(scipen = 999)
+theme_set(theme_minimal())
+```
+
+### 4E1
+
+#### Answer
+
+$y_i \sim \mathrm{Normal(\mu, \sigma)} $ represents the likelihood.
+
+### 4E2
+
+#### Answer
+
+There are two parameters in the posterior distribution: $\mu, \sigma$.
+
+### 4E3
+
+#### Answer
+
+$\mathrm{Pr(\mu, \sigma |y)} = \dfrac{\mathrm{Pr(y |\mu\, \sigma)}\mathrm{Pr(\mu)Pr(\sigma)}}{\mathrm{Pr(y)}}$
+
+Note that $\mu$ and $\sigma$ are independent.
+
+### 4E4
+
+#### Answer
+
+$u_i = \alpha + \beta x_i$ represents the linear model.
+
+### 4E5
+
+#### Answer
+
+There are three parameters in the posterior distribution: $\alpha, \mu, \sigma$.
+
+### 4M1
+
+#### Answer
+
+```{r}
+prior_samples <- list(
+  mu = rnorm(n = 100000, mean = 0, sd = 10),
+  sigma = rexp(n = 100000, rate = 1)
+)
+
+y_prior <- rnorm(100000, mean = prior_samples$mu, sd = prior_samples$sigma)
+```
+
+```{r}
+hist(y_prior)
+```
+### 4M2
+
+#### Answer
+
+The following codes the model as a `stan` program.
+
+```{r}
+stan_model_simple <- "
+data {
+  int<lower=0> N;
+  vector[N] x;
+  vector[N] y;
+}
+parameters {
+  real mu;
+  real sigma;
+}
+model {
+  mu ~ normal(0, 10)
+  sigma ~ exp(1)
+  y ~ normal(mu, sigma)
+}
+"
+```
+
+### 4M3
+
+#### Answer
+
+$y_i \sim \mathrm{N(\mu_i, \sigma)}$
+$\mu_i = \alpha + \beta x_i$
+$\alpha \sim \mathrm{N(0, 10)}$
+$\beta \sim \mathrm{U(0, 1)}$
+$\sigma \sim \mathrm{Exp(1)}$
+
+### 4M4
+
+#### Answer
+
+Note: We'll model with the un-standardized values of the height and year for ease of interpretation. Depending on the age of the students we're studying, we may have different prior knowledge about average heights and height growth over time (e.g. younger students vs. students at puberty).
+
+```{r}
+stan_model_height <- "
+data {
+  int<lower=0> N;
+  vector[N] year;
+  vector[N] height;
+}
+parameters {
+  real alpha;
+  real beta;
+  real sigma;
+}
+transformed parameters {
+  mu = alpha + beta * year
+}
+model {
+  alpha ~ normal(150, 15)
+  sigma ~ uniform(0, 30)
+  beta ~ normal(0, 1)
+  y ~ normal(mu, sigma)
+}
+"
+```
+
+### 4M5
+
+#### Answer
+
+If students get taller, the coefficient for `year` should always be positive. I would change the distribution of `beta` to be `gamma` or `lognormal` instead of `normal` to enforce positive values. The mean for the gamma distribution should also be more positive depending on the age of the students we're modelling; e.g. for students near puberty age, we would expect the coefficient to be more positive rather than close to zero.
+
+### 4M6
+
+#### Answer
+
+We could truncate the `uniform` prior at 8 (`sqrt(64)`).
+
+### 4M7
+
+
+
+
+
+
+
+

@@ -1,5 +1,5 @@
 ---
-title: "Chapter 2 Solutions"
+title: "Chapter 2 Practice Exercises Solutions"
 author: "Cuong Duong"
 date: "2020-10-21"
 output:
