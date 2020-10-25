@@ -7,3 +7,4 @@
 **/renv/staging/
 **/renv/python/
 **/renv/.gitignore
+.Rproj.user

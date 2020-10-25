@@ -12,6 +12,7 @@ library(cmdstanr)
 library(ggplot2)
 library(data.table)
 library(magrittr)
+library
 
 options(scipen = 999)
 theme_set(theme_minimal())
@@ -95,9 +96,13 @@ model {
 #### Answer
 
 $y_i \sim \mathrm{N(\mu_i, \sigma)}$
+
 $\mu_i = \alpha + \beta x_i$
+
 $\alpha \sim \mathrm{N(0, 10)}$
+
 $\beta \sim \mathrm{U(0, 1)}$
+
 $\sigma \sim \mathrm{Exp(1)}$
 
 ### 4M4
@@ -119,13 +124,13 @@ parameters {
   real sigma;
 }
 transformed parameters {
-  mu = alpha + beta * year
+  real mu = alpha + beta * year;
 }
 model {
-  alpha ~ normal(150, 15)
-  sigma ~ uniform(0, 30)
-  beta ~ normal(0, 1)
-  y ~ normal(mu, sigma)
+  alpha ~ normal(150, 15);
+  sigma ~ uniform(0, 30);
+  beta ~ normal(0, 1);
+  y ~ normal(mu, sigma);
 }
 "
 ```
@@ -144,10 +149,327 @@ We could truncate the `uniform` prior at 8 (`sqrt(64)`).
 
 ### 4M7
 
+### Answer
 
+```{r}
+df <- fread("../data/howell_1.csv")
+df_adult <- df[age >= 18, ]
+```
 
+Original model:
 
+```{r}
+m4_3_defn <- "
+data {
+  int<lower=0> N;
+  vector<lower=0>[N] height;
+  vector<lower=0>[N] weight;
+  real weight_mean;
+}
+parameters {
+  real<lower=0> sigma;
+  real alpha;
+  real<lower=0> beta;
+}
+transformed parameters {
+  vector[N] mu;
+  mu = alpha + beta * (weight - weight_mean);
+}
+model {
+  height ~ normal(mu, sigma);
+  alpha ~ normal(178, 20);
+  beta ~ lognormal(0, 1);
+  sigma ~ uniform(0, 100);
+}
+"
+```
 
+```{r, cache=TRUE, results='hide'}
+m4_3 <- cmdstan_model(write_stan_file(m4_3_defn))
+```
 
+At the time of writing `cmdstanr` doesn't have the functionality to save the Hessian output from MAP optimization and draw samples from the quadratic approximation of the posterior, so we'll just use MCMC sampling instead.
 
+```{r, results='hide'}
+m4_3_fit <- m4_3$sample(
+  data = c(as.list(df_adult), N = nrow(df_adult), weight_mean = mean(df_adult$weight)),
+  seed = 123,
+  adapt_delta = 0.95,
+  iter_warmup = 10000,
+  iter_sampling = 10000,
+  parallel_chains = 4,
+  refresh = 0,
+  show_messages = FALSE
+)
+```
+
+Now we re-specify the model without centering `weight`:
+
+```{r}
+m4_3_nocenter_defn <- "
+data {
+  int<lower=0> N;
+  vector<lower=0>[N] height;
+  vector<lower=0>[N] weight;
+}
+parameters {
+  real<lower=0> sigma;
+  real alpha;
+  real<lower=0> beta;
+}
+transformed parameters {
+  vector[N] mu;
+  mu = alpha + beta * weight;
+}
+model {
+  height ~ normal(mu, sigma);
+  alpha ~ normal(178, 20);
+  beta ~ lognormal(0, 1);
+  sigma ~ uniform(0, 100);
+}
+"
+```
+
+```{r, cache=TRUE, results='hide'}
+m4_3_nocenter <- cmdstan_model(write_stan_file(m4_3_nocenter_defn))
+```
+
+```{r, results='hide'}
+m4_3_nocenter_fit <- m4_3_nocenter$sample(
+  data = c(as.list(df_adult), N = nrow(df_adult)),
+  seed = 123,
+  adapt_delta = 0.95,
+  max_treedepth = 12,
+  iter_warmup = 10000,
+  iter_sampling = 10000,
+  parallel_chains = 4,
+  refresh = 0,
+  show_messages = FALSE
+)
+```
+
+```{r}
+m4_3_fit$summary(variables = c("sigma", "alpha", "beta"))
+```
+
+```{r}
+m4_3_nocenter_fit$summary(variables = c("sigma", "alpha", "beta"))
+```
+
+Covariance among parameters:
+
+```{r}
+calculate_covariance <- function(stan_fit, variables) {
+  cov_matrix <- stan_fit$draws(variables = variables) %>% 
+    matrix(nrow = dim(.)[1] * dim(.)[2], dim(.)[3]) %>% 
+    cov()
+  colnames(cov_matrix) <- variables
+  rownames(cov_matrix) <- variables
+  
+  cov_matrix
+}
+```
+
+```{r}
+calculate_covariance(m4_3_fit, c("sigma", "alpha", "beta")) %>% 
+  round(4)
+```
+
+```{r}
+calculate_covariance(m4_3_nocenter_fit, c("sigma", "alpha", "beta")) %>% 
+  round(4)
+```
+
+The variance for `alpha` is much larger for the non-centered paramaterization. The covariance between `alpha` and the other parameters are also larger, whereas they are almost close to zero (which is our expectation as the parameters are independent) in the centered parameterization. 
+
+So when we don't center, we can get more volatile results for the intercept of the linear model.
+
+Now we compare the posterior predictions of the models:
+
+```{r}
+predict_height <- function(stan_fit, newdata, centered_model = TRUE) {
+  variables <- c("sigma", "alpha", "beta")
+  draws <- stan_fit$draws(variables = variables) %>% 
+    matrix(nrow = dim(.)[1] * dim(.)[2], dim(.)[3])
+  colnames(draws) <- variables
+  
+  n_draws <- nrow(draws)
+  n_obs <- nrow(newdata)
+  replicated_alpha <- draws[, "alpha"] %>% 
+    matrix(nrow = n_obs, ncol = n_draws, byrow = TRUE)
+  replicated_beta <- draws[, "beta"] %>% 
+    matrix(nrow = n_obs, ncol = n_draws, byrow = TRUE)
+  replicated_sigma <- draws[, "sigma"] %>% 
+    matrix(nrow = n_obs, ncol = n_draws, byrow = TRUE)
+  
+  if (centered_model) {
+    weight_predictor <- (newdata$weight -  mean(newdata$weight)) * replicated_beta
+  } else {
+    weight_predictor <- newdata$weight * replicated_beta
+  }
+  
+  predictive_draws <- replicated_alpha + weight_predictor + replicated_sigma
+  percentiles <- apply(predictive_draws, 1, quantile, probs = c(0.05, 0.5, 0.95), na.rm = TRUE) %>% t()
+  summary <- as.data.table(percentiles)
+  setnames(summary, c("p05", "median", "p95"))
+  summary[, "mean" := rowMeans(predictive_draws, na.rm = TRUE)]
+  summary[, "weight" := newdata$weight]
+  
+  summary[]
+}
+```
+
+```{r}
+height_preds_center <- predict_height(m4_3_fit, df_adult, centered = TRUE)
+height_preds_nocenter <- predict_height(m4_3_nocenter_fit, df_adult, centered = FALSE)
+```
+
+```{r}
+plot_height_preds <- function(preds_df) {
+  df <- copy(preds_df)
+  df[, "obs_id" := .I]
+  p <- df %>% 
+    ggplot(aes(x = weight, y = mean, ymax = p95, ymin = p05)) +
+    geom_point() +
+    geom_errorbar()
+  
+  p
+}
+```
+
+```{r}
+plot_height_preds(height_preds_center)
+```
+```{r}
+plot_height_preds(height_preds_nocenter)
+```
+
+The model's height predictions and uncertainty are quite similar, however. Even though the variance of `beta` is higher for the non-centered model, the variance may 'cancel out' across the parameters, so the uncertainty of the predictions do not increase.
+
+### 4M8
+
+#### Answer
+
+```{r}
+dfc <- fread("../data/cherry_blossoms.csv")
+dfc_doy <- dfc[complete.cases(doy), ]
+```
+
+```{r}
+generate_basis_splines <- function(num_knots, degree) {
+  knot_list <- quantile(dfc_doy$doy, probs = seq(0, 1, length.out = num_knots))
+  splines::bs(
+    dfc_doy$doy,
+    knots = knot_list[-c(1, num_knots)] ,
+    degree = degree, 
+    intercept = TRUE
+  )
+}
+```
+
+```{r}
+generate_spline_model_code <- function(weight_prior_sd) {
+  model_code <- "
+  data {
+    int<lower=0> N;
+    int<lower=0> num_weights;
+    vector[N] doy;
+    matrix[N, num_weights] B;
+  }
+  parameters {
+    real<lower=0> sigma;
+    real alpha;
+    vector[num_weights] w;
+  }
+  transformed parameters {
+    vector[N] mu;
+    mu = alpha + B * w;
+  }
+  model {
+    doy ~ normal(mu, sigma);
+    alpha ~ normal(100, 10);
+    w ~ normal(0, {{weight_prior_sd}});
+    sigma ~ exponential(1);
+  }
+  "
+  model_code <- glue::glue(model_code, weight_prior_sd = weight_prior_sd, .open = "{{", .close = "}}")
+  model_code
+}
+```
+
+We will test the following scenarios:
+
+* `num_knots`: 15, 30
+* `weight_prior_sd`: 1, 10, 100
+
+```{r}
+basis_splines <- list(
+  lower = generate_basis_splines(15, 3),
+  higher = generate_basis_splines(30, 3)
+)
+```
+
+```{r}
+models_code <- list(
+  narrow = generate_spline_model_code(weight_prior_sd = 1),
+  medium = generate_spline_model_code(weight_prior_sd = 10),
+  wide = generate_spline_model_code(weight_prior_sd = 100)
+)
+```
+
+```{r, results='hide'}
+models <- lapply(models_code, function(x) cmdstan_model(write_stan_file(x)))
+```
+
+```{r}
+fit_all_models <- function(models, basis_splines) {
+  models_cb_fit <- list() 
+  for (i in seq_along(basis_splines)) {
+    spline_type <- names(basis_splines)[i]
+    for (j in seq_along(models)) {
+      model_type <- names(models)[j]
+      models_cb_fit[[glue::glue("spline:{spline_type}--weight_sd:{model_type}")]] <- models[[j]]$optimize(
+        data = list(doy = dfc_doy$doy, N = nrow(dfc_doy), num_weights = ncol(basis_splines[[i]]), B = basis_splines[[i]]),
+        seed = 123,
+        algorithm = "newton",
+        refresh = 0
+      )
+    }
+  }
+  
+  models_cb_fit
+}
+```
+
+```{r, results='hide'}
+models_cb_fit <- fit_all_models(models, basis_splines)
+```
+
+```{r}
+get_predictions <- function(spline_model) {
+  output_params <- names(spline_model$mle())
+  preds_names <- grep("^mu", output_params, value = TRUE)
+  preds <- spline_model$mle()[preds_names]
+  preds_df <- data.table(year = dfc_doy$year, doy = dfc_doy$doy, doy_pred = preds)
+  
+  preds_df
+}
+compare_predictions <- function(models_list) {
+  all_preds <- lapply(models_list, get_predictions)
+  all_preds_df <- rbindlist(all_preds, idcol = "model")
+  all_preds_df[, "model" := factor(model, names(models_list))]
+  all_preds_df
+}
+```
+
+```{r}
+all_preds <- compare_predictions(models_cb_fit)
+```
+
+```{r}
+all_preds %>% 
+  ggplot(aes(x = year, y = doy_pred)) +
+  geom_line() +
+  facet_wrap(~model, ncol = 3)
+```
 
