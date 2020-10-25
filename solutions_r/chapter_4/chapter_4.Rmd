@@ -12,7 +12,7 @@ library(cmdstanr)
 library(ggplot2)
 library(data.table)
 library(magrittr)
-library
+library(glue)
 
 options(scipen = 999)
 theme_set(theme_minimal())
@@ -392,7 +392,7 @@ generate_spline_model_code <- function(weight_prior_sd) {
     sigma ~ exponential(1);
   }
   "
-  model_code <- glue::glue(model_code, weight_prior_sd = weight_prior_sd, .open = "{{", .close = "}}")
+  model_code <- glue(model_code, weight_prior_sd = weight_prior_sd, .open = "{{", .close = "}}")
   model_code
 }
 ```
@@ -428,7 +428,7 @@ fit_all_models <- function(models, basis_splines) {
     spline_type <- names(basis_splines)[i]
     for (j in seq_along(models)) {
       model_type <- names(models)[j]
-      models_cb_fit[[glue::glue("spline:{spline_type}--weight_sd:{model_type}")]] <- models[[j]]$optimize(
+      models_cb_fit[[glue("spline:{spline_type}--weight_sd:{model_type}")]] <- models[[j]]$optimize(
         data = list(doy = dfc_doy$doy, N = nrow(dfc_doy), num_weights = ncol(basis_splines[[i]]), B = basis_splines[[i]]),
         seed = 123,
         algorithm = "newton",
