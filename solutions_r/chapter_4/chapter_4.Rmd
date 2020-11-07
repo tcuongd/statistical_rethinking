@@ -22,7 +22,7 @@ theme_set(theme_minimal())
 
 #### Answer
 
-$y_i \sim \mathrm{Normal(\mu, \sigma)} $ represents the likelihood.
+$y_i \sim \mathrm{N(\mu, \sigma)}$ represents the likelihood.
 
 ### 4E2
 
@@ -287,41 +287,32 @@ So when we don't center, we can get more volatile results for the intercept of t
 Now we compare the posterior predictions of the models:
 
 ```{r}
-predict_height <- function(stan_fit, newdata, centered_model = TRUE) {
-  variables <- c("sigma", "alpha", "beta")
-  draws <- stan_fit$draws(variables = variables) %>% 
-    matrix(nrow = dim(.)[1] * dim(.)[2], dim(.)[3])
-  colnames(draws) <- variables
-  
+predict_height <- function(stan_fit, newdata, center = 0, posterior_bounds = c(0.05, 0.95)) {
+  draws <- posterior::as_draws_matrix(stan_fit$draws(c("sigma", "alpha", "beta")))
   n_draws <- nrow(draws)
   n_obs <- nrow(newdata)
-  replicated_alpha <- draws[, "alpha"] %>% 
-    matrix(nrow = n_obs, ncol = n_draws, byrow = TRUE)
-  replicated_beta <- draws[, "beta"] %>% 
-    matrix(nrow = n_obs, ncol = n_draws, byrow = TRUE)
-  replicated_sigma <- draws[, "sigma"] %>% 
-    matrix(nrow = n_obs, ncol = n_draws, byrow = TRUE)
   
-  if (centered_model) {
-    weight_predictor <- (newdata$weight -  mean(newdata$weight)) * replicated_beta
-  } else {
-    weight_predictor <- newdata$weight * replicated_beta
+  preds <- matrix(0, nrow = n_obs, ncol = n_draws)
+  for (i in seq_len(n_obs)) {
+    mu <- draws[, "alpha"] + (newdata$weight[i] - center) * draws[, "beta"]
+    preds[i, ] <- rnorm(length(mu), mu, draws[, "sigma"])
   }
   
-  predictive_draws <- replicated_alpha + weight_predictor + replicated_sigma
-  percentiles <- apply(predictive_draws, 1, quantile, probs = c(0.05, 0.5, 0.95), na.rm = TRUE) %>% t()
-  summary <- as.data.table(percentiles)
-  setnames(summary, c("p05", "median", "p95"))
-  summary[, "mean" := rowMeans(predictive_draws, na.rm = TRUE)]
-  summary[, "weight" := newdata$weight]
+  percentiles <- apply(preds, 1, quantile, probs = posterior_bounds, na.rm = TRUE)
+  summary <- data.table(
+    weight = newdata$weight,
+    height_lower = percentiles[1, ],
+    height_expected = rowMeans(preds, na.rm = TRUE),
+    height_upper = percentiles[2, ]
+  )
   
-  summary[]
+  summary
 }
 ```
 
 ```{r}
-height_preds_center <- predict_height(m4_3_fit, df_adult, centered = TRUE)
-height_preds_nocenter <- predict_height(m4_3_nocenter_fit, df_adult, centered = FALSE)
+height_preds_center <- predict_height(m4_3_fit, df_adult, center = mean(df_adult$weight))
+height_preds_nocenter <- predict_height(m4_3_nocenter_fit, df_adult)
 ```
 
 ```{r}
@@ -329,9 +320,9 @@ plot_height_preds <- function(preds_df) {
   df <- copy(preds_df)
   df[, "obs_id" := .I]
   p <- df %>% 
-    ggplot(aes(x = weight, y = mean, ymax = p95, ymin = p05)) +
+    ggplot(aes(x = weight, y = height_expected, ymax = height_upper, ymin = height_lower)) +
     geom_point() +
-    geom_errorbar()
+    geom_ribbon(alpha = 0.4)
   
   p
 }
@@ -340,6 +331,7 @@ plot_height_preds <- function(preds_df) {
 ```{r}
 plot_height_preds(height_preds_center)
 ```
+
 ```{r}
 plot_height_preds(height_preds_nocenter)
 ```
@@ -359,7 +351,7 @@ dfc_doy <- dfc[complete.cases(doy), ]
 generate_basis_splines <- function(num_knots, degree) {
   knot_list <- quantile(dfc_doy$doy, probs = seq(0, 1, length.out = num_knots))
   splines::bs(
-    dfc_doy$doy,
+    dfc_doy$year,
     knots = knot_list[-c(1, num_knots)] ,
     degree = degree, 
     intercept = TRUE
@@ -405,7 +397,7 @@ We will test the following scenarios:
 ```{r}
 basis_splines <- list(
   lower = generate_basis_splines(15, 3),
-  higher = generate_basis_splines(30, 3)
+  higher = generate_basis_splines(50, 3)
 )
 ```
 
@@ -431,8 +423,11 @@ fit_all_models <- function(models, basis_splines) {
       models_cb_fit[[glue("spline:{spline_type}--weight_sd:{model_type}")]] <- models[[j]]$optimize(
         data = list(doy = dfc_doy$doy, N = nrow(dfc_doy), num_weights = ncol(basis_splines[[i]]), B = basis_splines[[i]]),
         seed = 123,
-        algorithm = "newton",
-        refresh = 0
+        algorithm = "lbfgs",
+        refresh = 0,
+        init = list(
+          list(w = 0)
+        )
       )
     }
   }
@@ -447,9 +442,7 @@ models_cb_fit <- fit_all_models(models, basis_splines)
 
 ```{r}
 get_predictions <- function(spline_model) {
-  output_params <- names(spline_model$mle())
-  preds_names <- grep("^mu", output_params, value = TRUE)
-  preds <- spline_model$mle()[preds_names]
+  preds <- spline_model$mle("mu")
   preds_df <- data.table(year = dfc_doy$year, doy = dfc_doy$doy, doy_pred = preds)
   
   preds_df
@@ -469,7 +462,314 @@ all_preds <- compare_predictions(models_cb_fit)
 ```{r}
 all_preds %>% 
   ggplot(aes(x = year, y = doy_pred)) +
-  geom_line() +
+  geom_point(aes(x = year, y = doy), alpha = 0.2) +
+  geom_line(colour = "darkred", size = 1) +
   facet_wrap(~model, ncol = 3)
 ```
+The higher number of knots (`spline:higher`) doesn't actually seem to change the fit much for a given standard deviation prior on the weights. I'm guessing that 15 is a suitable number of knots for the range of years we're fitting, and a higher number of knots doesn't add much information.
+
+Changing the standard deviation prior does have a big impact though. A narrow prior effectively penalizes the fitting process and ensures the fitted line isn't too "wiggly". This is because a narrow prior requires more data to move the mean of `w` away from zero.
+
+We can see that the model with the wide standard deviation prior produces a more wiggly fit.
+
+### 4H1
+
+#### Answer
+
+We'll use the centered height model from exercise 4M7.
+
+```{r}
+predict_height(
+  m4_3_fit, 
+  data.table(weight = c(46.95, 43.72, 64.78, 32.59, 54.63)), 
+  center = mean(df_adult$weight),
+  posterior_bounds = c(0.055, 1 - 0.055)
+)
+```
+
+### 4H2
+
+#### Answer
+
+```{r}
+df_child <- df[age < 18, ]
+```
+
+(a)
+
+```{r}
+m_height_child_defn <- "
+data {
+  int<lower=0> N;
+  vector<lower=0>[N] height;
+  vector<lower=0>[N] weight;
+}
+parameters {
+  real<lower=0> alpha;
+  real<lower=0> sigma;
+  real beta;
+}
+transformed parameters {
+  vector[N] mu = alpha + beta * weight;
+}
+model {
+  height ~ normal(mu, sigma);
+  alpha ~ normal(130, 20);
+  beta ~ normal(0, 1);
+  sigma ~ exponential(1);
+}
+"
+```
+
+```{r, results='hide'}
+m_height_child <- cmdstan_model(write_stan_file(m_height_child_defn))
+```
+
+```{r, results='hide'}
+m_height_child_fit <- m_height_child$sample(
+  data = c(as.list(df_child), N = nrow(df_child)),
+  seed = 123,
+  adapt_delta = 0.95,
+  iter_warmup = 10000,
+  iter_sampling = 10000,
+  parallel_chains = 4,
+  refresh = 0,
+  show_messages = FALSE
+)
+```
+
+The main parameter estimate from the model is `beta`, the relationship between height and weight. We plot its marginal posterior distribution below.
+
+```{r}
+posterior::as_draws_df(m_height_child_fit$draws("beta")) %>% 
+  ggplot(aes(x = beta)) +
+  geom_histogram(binwidth = 0.01) +
+  geom_vline(xintercept = m_height_child_fit$summary("beta")[["q5"]]) +
+  geom_vline(xintercept = m_height_child_fit$summary("beta")[["q95"]])
+```
+
+The 90% percentile interval is approximately [2.59, 2.8], so for every 10 units of increase in weight we expect 25.9 to 28 units increase in height.
+
+(b)
+
+For each child, calculate the posterior mean of `mu` and the 89% percentile interval.
+
+```{r}
+summarise_mu_height <- function(fit, data, bounds) {
+  posterior_mu <- posterior::as_draws_matrix(fit$draws("mu"))
+  bounds_mu <- apply(posterior_mu, 2, quantile, bounds)
+  
+  mu_summary <- data.table(
+    weight = data$weight,
+    height = data$height,
+    lower = bounds_mu[1, ],
+    mean = apply(posterior_mu, 2, mean),
+    upper = bounds_mu[2, ]
+  )
+  
+  mu_summary
+}
+
+summarise_predictions_height <- function(fit, data, bounds) {
+  posterior_mu <- posterior::as_draws_matrix(fit$draws("mu"))
+  posterior_sigma <- posterior::as_draws_matrix(fit$draws("sigma"))
+  preds <- matrix(0, nrow = nrow(posterior_mu), ncol = nrow(data))
+  for (i in seq_len(nrow(data))) {
+    preds[, i] <- rnorm(nrow(posterior_mu), posterior_mu[, i], posterior_sigma[, "sigma"])
+  }
+  
+  bounds_preds <- apply(preds, 2, quantile, bounds)
+  preds_summary <- data.table(
+    weight = data$weight,
+    height = data$height,
+    height_lower = bounds_preds[1, ],
+    height_expected = apply(preds, 2, mean),
+    height_upper = bounds_preds[2, ]
+  )
+  
+  preds_summary
+}
+```
+
+```{r}
+plot_m_height <- function(mu_summary, preds_summary, title) {
+  p <- ggplot() +
+    geom_point(data = mu_summary, aes(x = weight, y = height), alpha = 0.2) +
+    geom_line(data = mu_summary, aes(x = weight, y = mean), size = 0.8, colour = "darkred") +
+    geom_ribbon(data = mu_summary, aes(x = weight, ymin = lower, ymax = upper), fill = "red", alpha = 0.3) +
+    geom_ribbon(data = preds_summary, aes(x = weight, ymin = height_lower, ymax = height_upper), fill = "blue", alpha = 0.2) +
+    labs(title = title)
+
+  p
+}
+```
+
+```{r}
+plot_m_height(
+  summarise_mu_height(m_height_child_fit, df_child, c(0.055, 1 - 0.055)),
+  summarise_predictions_height(m_height_child_fit, df_child, c(0.055, 1 - 0.055)),
+  "Child Height Model"
+)
+```
+
+(c) The model doesn't fit the weight of heavier children well. It assumes a linear relationship between weight and height, but the relationship is not linear as weight grows (i.e. heavier children are less likely to have proportionate increases in height). I would try to fit a polynomial regression (even quadratic might fit this dataset well) instead.
+
+### 4H3
+
+#### Answer
+
+(a)
+
+```{r}
+m_height_log_defn <- "
+data {
+  int<lower=0> N;
+  vector<lower=0>[N] height;
+  vector<lower=0>[N] weight;
+}
+parameters {
+  real<lower=0> alpha;
+  real<lower=0> sigma;
+  real beta;
+}
+transformed parameters {
+  vector[N] mu = alpha + beta * log(weight);
+}
+model {
+  height ~ normal(mu, sigma);
+  alpha ~ normal(130, 20);
+  beta ~ normal(0, 1);
+  sigma ~ exponential(1);
+}
+"
+```
+
+```{r, results='hide'}
+m_height_log <- cmdstan_model(write_stan_file(m_height_log_defn))
+```
+
+```{r, results='hide'}
+m_height_log_fit <- m_height_log$sample(
+  data = c(as.list(df), N = nrow(df)),
+  adapt_delta = 0.9,
+  seed = 123, 
+  refresh = 0, 
+  chains = 4, 
+  parallel_chains = 4, 
+  iter_warmup = 10000, 
+  iter_sampling = 10000,
+  show_messages = FALSE
+)
+```
+
+```{r}
+m_height_log_fit$summary(variables = c("alpha", "beta", "sigma"))
+```
+
+The parameter of interest here is `beta`. It represents the increase in height for every unit increase in `log(weight)`. This is estimated to be 16.46, with a range of [14.31, 18.622]. For lower values of `weight`, the log increase will match more closely with the raw increase in `weight`, but people get heavier, the model is saying there must be a relatively large increase in `weight` before `height` increases.
+
+(b)
+
+```{r}
+plot_m_height(
+  summarise_mu_height(m_height_log_fit, df, bounds = c(0.015, 1 - 0.015)),
+  summarise_predictions_height(m_height_log_fit, df, bounds = c(0.015, 1 - 0.015)),
+  "General Height Model - Log Weight Predictor"
+)
+```
+The fit is not great: the logarithm curve does not increase steeply enough with `weight`. Because of this, the lower tails are over-predicted and the upper tails are under-predicted.
+
+### 4H4
+
+#### Answer
+
+The model is:
+
+$h_i \sim \mathrm{N(\mu_i, \sigma)}$
+
+$mu_i = \alpha + \beta_1 x_i + \beta_2 x_{i}^2$
+
+$\alpha \sim N(178, 20)$
+
+$\beta_1 \sim \mathrm{LN(0, 1)}$
+
+$\beta_2 \sim \mathrm{N(0, 1)}$
+
+$\sigma \sim \mathrm{U(0, 50)}$
+
+where $x_i$ is the standardized weight.
+
+We simulate the prior predictive distribution for each `weight` value.
+
+```{r}
+sample_prior_predictive <- function(weight_vector, num_samples, params) {
+  alpha <- rnorm(num_samples, params$alpha['mean'], params$alpha['sd'])
+  beta1 <- rlnorm(num_samples, params$beta1['mean'], params$beta2['sd'])
+  beta2 <- rnorm(num_samples, params$beta2['mean'], params$beta2['sd'])
+  sigma <- runif(num_samples, params$sigma['lower'], params$sigma['upper'])
+  weight_std <- (weight_vector - mean(weight_vector)) / sd(weight_vector)
+    
+  preds <- matrix(0, nrow = length(weight_vector), ncol = num_samples)
+  for (i in seq_along(weight_vector)) {
+    mu <- alpha + beta1 * weight_std[i] + beta2 * weight_std[i]^2
+    preds[i, ] <- rnorm(num_samples, mu, sigma)
+  }
+  
+  preds
+}
+
+summarise_prior_predictive <- function(weight_vector, preds, bounds = c(0.05, 0.95)) {
+  percentiles <- apply(preds, 1, quantile, probs = bounds)
+  df <- data.table(
+    weight = weight_vector,
+    height_lower = percentiles[1, ],
+    height_expected = apply(preds, 1, mean),
+    height_upper = percentiles[2, ]
+  )
+  
+  df
+}
+
+plot_prior_predictive <- function(summary) {
+  p <- ggplot(data = summary, aes(x = weight, y = height_expected,  ymin = height_lower, ymax = height_upper)) +
+    geom_line(colour = "darkred", size = 0.8) +
+    geom_ribbon(fill = "red", alpha = 0.2)
+  
+  p
+}
+
+test_prior_params <- function(params) {
+  preds <- sample_prior_predictive(weight_vector = df$weight, num_samples = 100000, params)
+  preds_summary <- summarise_prior_predictive(df$weight, preds)
+  
+  plot_prior_predictive(preds_summary)
+}
+```
+
+```{r}
+test_prior_params(
+  list(
+    alpha = c(mean = 178, sd = 20),
+    beta1 = c(mean = 0, sd = 1),
+    beta2 = c(mean = 0, sd = 1),
+    sigma = c(lower = 0, upper = 50)
+  )
+) 
+```
+Some things we could try fixing:
+* It's unlikely that people with weights < 20 (children) will be above 175 in height. `alpha` likely needs to have a lower mean.
+* The real slope of the line is likely steeper. The current slope increases very slowly with weight.
+* As a result of the point 2), the line doesn't extend far enough to reach taller heights. It caps at around 180, but heights of ~190 are plausible for weights around 65-70.
+
+```{r}
+test_prior_params(
+  list(
+    alpha = c(mean = 150, sd = 20),
+    beta1 = c(mean = 2, sd = 1),
+    beta2 = c(mean = 0, sd = 1),
+    sigma = c(lower = 0, upper = 50)
+  )
+) 
+```
+
 
