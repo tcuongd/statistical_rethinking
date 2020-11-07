@@ -349,7 +349,7 @@ dfc_doy <- dfc[complete.cases(doy), ]
 
 ```{r}
 generate_basis_splines <- function(num_knots, degree) {
-  knot_list <- quantile(dfc_doy$doy, probs = seq(0, 1, length.out = num_knots))
+  knot_list <- quantile(dfc_doy$year, probs = seq(0, 1, length.out = num_knots))
   splines::bs(
     dfc_doy$year,
     knots = knot_list[-c(1, num_knots)] ,
@@ -466,11 +466,7 @@ all_preds %>%
   geom_line(colour = "darkred", size = 1) +
   facet_wrap(~model, ncol = 3)
 ```
-The higher number of knots (`spline:higher`) doesn't actually seem to change the fit much for a given standard deviation prior on the weights. I'm guessing that 15 is a suitable number of knots for the range of years we're fitting, and a higher number of knots doesn't add much information.
-
-Changing the standard deviation prior does have a big impact though. A narrow prior effectively penalizes the fitting process and ensures the fitted line isn't too "wiggly". This is because a narrow prior requires more data to move the mean of `w` away from zero.
-
-We can see that the model with the wide standard deviation prior produces a more wiggly fit.
+A narrow prior effectively penalizes the fitting process and ensures the fitted line isn't too "wiggly". This is because a narrow prior requires more data to move the mean of `w` away from zero. We can see that the model with the wide standard deviation prior produces a more wiggly fit. Increasing the number of knots has a similar effect.
 
 ### 4H1
 
@@ -772,4 +768,222 @@ test_prior_params(
 ) 
 ```
 
+### 4H5
+
+#### Answer
+
+```{r}
+dfc_doy_temp <- dfc[complete.cases(dfc[, .(temp, doy)])]
+```
+
+We'll plot the relationship between `temp` and `doy` first to get an idea of which model we want to use.
+
+```{r}
+ggplot(dfc_doy_temp, aes(x = temp, y = doy)) +
+  geom_point()
+```
+
+It's hard to see a univariate model that does well given this scatterplot. There's no clear relationship between the March temperature and the blossom date. There is a slight negative trend (higher temperature -> blossoms earlier) but even so it is weak.
+
+The most effective model to consider here is probably a linear model.
+
+```{r}
+m_cb_temp_defn <- "
+data {
+  int<lower=0> N;
+  vector<lower=0>[N] doy;
+  vector[N] temp;
+  real mean_temp;
+}
+parameters {
+  real<lower=0> sigma;
+  real beta;
+  real<lower=0> alpha;
+}
+transformed parameters {
+  vector[N] mu = alpha + beta * (temp - mean_temp);
+}
+model {
+  doy ~ normal(mu, sigma);
+  alpha ~ normal(100, 20);
+  beta ~ normal(0, 1);
+  sigma ~ exponential(1);
+}
+"
+```
+
+```{r, results='hide'}
+m_cb_temp <- cmdstan_model(write_stan_file(m_cb_temp_defn))
+```
+
+```{r, results='hide'}
+m_cb_temp_fit <- m_cb_temp$optimize(
+  data = c(as.list(dfc_doy_temp), N = nrow(dfc_doy_temp), mean_temp = mean(dfc_doy_temp$temp)),
+  seed = 123, 
+  refresh = 0,
+  algorithm = "lbfgs"
+)
+```
+
+```{r}
+dfc_doy_temp[, "doy_expected" := m_cb_temp_fit$mle("mu")]
+```
+
+```{r}
+dfc_doy_temp %>% 
+  ggplot(aes(x = temp)) +
+  geom_point(aes(y = doy), alpha = 0.2) +
+  geom_line(aes(y = doy_expected), colour = "darkred", size = 0.8)
+```
+
+As expected, the linear model is showing a negative relationship between March temperature and the blossom date; the higher the temperature, the earlier the blossom date. However, the model fit is not good, as there are many dates where the blossom date is much later or sooner than the predicted date for a given temperature level.
+
+### 4H6
+
+#### Answer
+
+```{r}
+simulate_prior_predictive_doy <- function(year_vector, num_samples = 100000, params) {
+  B <- generate_basis_splines(15, 3)
+  sigma <- rexp(num_samples, params$sigma['rate'])
+  alpha <- rnorm(num_samples, params$alpha['mean'], params$alpha['sd'])
+  weights <- matrix(0, nrow = num_samples, ncol = ncol(B))
+  for (i in seq_len(ncol(B))) {
+    weights[, i] <- rnorm(num_samples, params$w['mean'], params$w['sd'])
+  }
+  
+  preds <- matrix(0, nrow = length(year_vector), ncol = num_samples)
+  for (i in seq_along(year_vector)) {
+    mu <- alpha + weights %*% B[i, ]
+    preds[i, ] <- rnorm(num_samples, mu, sigma)
+  }
+  
+  preds
+}
+
+summarise_prior_predictive_doy <- function(year_vector, preds, bounds = c(0.05, 0.95)) {
+  percentiles <- apply(preds, 1, quantile, bounds)
+  df <- data.table(
+    year = year_vector,
+    doy_lower = percentiles[1, ],
+    doy_expected = apply(preds, 1, mean),
+    doy_upper = percentiles[2, ]
+  )
+  
+  df
+}
+
+plot_prior_predictive_doy <- function(summary) {
+  p <- ggplot(summary, aes(x = year)) +
+    geom_line(aes(y = doy_expected), colour = "darkred", size = 0.8) +
+    geom_ribbon(aes(ymin = doy_lower, ymax = doy_upper), fill = "red", alpha = 0.2)
+  
+  p
+}
+
+test_prior_predictive_doy <- function(params) {
+  preds <- simulate_prior_predictive_doy(dfc_doy$year, 100000, params)
+  preds_summary <- summarise_prior_predictive_doy(dfc_doy$year, preds)
+  
+  plot_prior_predictive_doy(preds_summary)
+}
+```
+
+Simulating the priors proposed in the chapter:
+
+```{r}
+test_prior_predictive_doy(
+  list(
+    alpha = c(mean = 100, sd = 10),
+    sigma = c(rate = 1),
+    w = c(mean = 0, sd = 10)
+  )
+) +
+  labs(title = "sd on weight prior = 10")
+```
+
+Testing a lower standard deviation on the `w` prior:
+
+```{r}
+test_prior_predictive_doy(
+  list(
+    alpha = c(mean = 100, sd = 10),
+    sigma = c(rate = 1),
+    w = c(mean = 0, sd = 1)
+  )
+) +
+  labs(title = "sd on weight prior = 1")
+```
+
+Versus a higher standard deviation for the `w` prior:
+
+```{r}
+test_prior_predictive_doy(
+  list(
+    alpha = c(mean = 100, sd = 10),
+    sigma = c(rate = 1),
+    w = c(mean = 0, sd = 50)
+  )
+) +
+  labs(title = "sd on weight prior = 50")
+```
+
+When the standard deviation of `w` is lower, the range of plausible values for `doy` as suggested by the prior is much smaller. Conversely, a larger standard deviation expands the range of values, especially at the ends of the fit (the earliest and latest years).
+
+The weights are multipled by the basis functions to get `mu`, so if we have a lower standard deviation on the `w` prior, we are keeping our estimates of `w` closer to 0 unless the data strongly suggests otherwise. This effectively acts as a "penalty" on the weights.
+
+### 4H8
+
+#### Answer
+
+```{r}
+num_knots <- 15
+degree <- 3
+knot_list <- quantile(dfc_doy$year, probs = seq(0, 1, length.out = num_knots))
+B <- splines::bs(
+  dfc_doy$year,
+  knots = knot_list[-c(1, num_knots)] ,
+  degree = degree, 
+  intercept = TRUE
+)
+```
+
+```{r}
+m_doy_nointercept_defn <- "
+data {
+  int<lower=0> N;
+  int<lower=0> num_weights;
+  vector[N] doy;
+  matrix[N, num_weights] B;
+}
+parameters {
+  real<lower=0> sigma;
+  vector[num_weights] w;
+}
+transformed parameters {
+  vector[N] mu;
+  mu = B * w;
+}
+model {
+  (doy - mean(doy)) ~ normal(mu, sigma);
+  w ~ normal(0, 10);
+  sigma ~ exponential(1);
+}
+"
+```
+
+```{r, results='hide'}
+m_doy_nointercept <- cmdstan_model(write_stan_file(m_doy_nointercept_defn))
+```
+
+```{r}
+m_doy_nointercept_fit <- m_doy_nointercept$optimize(
+  data = list(doy = dfc_doy$doy, num_weights = ncol(B), B = B),
+  seed = 123, 
+  refresh = 0,
+  algorithm = "lbfgs"
+)
+```
+
+The fit fails here.
 

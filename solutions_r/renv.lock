@@ -116,8 +116,8 @@
       "RemoteUsername": "stan-dev",
       "RemoteRepo": "cmdstanr",
       "RemoteRef": "master",
-      "RemoteSha": "bc3c8a7824fcd13184fe447e73dfbbcc295eec83",
-      "Hash": "3a772a90cccf44f983f883464113e442"
+      "RemoteSha": "d27994f804c493ff3047a2a98d693fa90b83af98",
+      "Hash": "f8ba7e374806dde08d758d50fd581a3f"
     },
     "colorspace": {
       "Package": "colorspace",
@@ -352,8 +352,8 @@
       "RemoteUsername": "stan-dev",
       "RemoteRepo": "posterior",
       "RemoteRef": "master",
-      "RemoteSha": "6da75bfd5ef7704e0ef3dbdfadd6489dd7609183",
-      "Hash": "9c2632dff675c01ba3b8ae0370073283"
+      "RemoteSha": "15dcbbc3ccb1b685944364a777622bf2b566ff9d",
+      "Hash": "c1518ed48149f92772c80a9810c8ed68"
     },
     "praise": {
       "Package": "praise",
