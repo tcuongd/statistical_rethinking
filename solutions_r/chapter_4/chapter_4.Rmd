@@ -948,6 +948,11 @@ B <- splines::bs(
 )
 ```
 
+The changes we have to make to the model are:
+
+* `mu` is now defined as `B * w`, instead of `alpha + B * w`.
+* Since we are removing `alpha`, `w` will no longer be centered around 0. We center it around 100 instead to incorporate the intercept -- I'm not sure about this one, the fit seems to work but it doesn't make sense to me mathematically.
+
 ```{r}
 m_doy_nointercept_defn <- "
 data {
@@ -965,8 +970,8 @@ transformed parameters {
   mu = B * w;
 }
 model {
-  (doy - mean(doy)) ~ normal(mu, sigma);
-  w ~ normal(0, 10);
+  doy ~ normal(mu, sigma);
+  w ~ normal(100, 10);
   sigma ~ exponential(1);
 }
 "
@@ -978,12 +983,20 @@ m_doy_nointercept <- cmdstan_model(write_stan_file(m_doy_nointercept_defn))
 
 ```{r}
 m_doy_nointercept_fit <- m_doy_nointercept$optimize(
-  data = list(doy = dfc_doy$doy, num_weights = ncol(B), B = B),
+  data = list(doy = dfc_doy$doy, num_weights = ncol(B), B = B, N = nrow(dfc_doy)),
   seed = 123, 
   refresh = 0,
   algorithm = "lbfgs"
 )
 ```
 
-The fit fails here.
-
+```{r}
+data.table(
+  year = dfc_doy$year,
+  doy = dfc_doy$doy,
+  doy_expected = m_doy_nointercept_fit$mle("mu")
+) %>% 
+  ggplot(aes(x = year)) +
+  geom_point(aes(y = doy), alpha = 0.2) +
+  geom_line(aes(y = doy_expected), colour = "darkred", size = 0.8)
+```
